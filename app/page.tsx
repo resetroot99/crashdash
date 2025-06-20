@@ -1,10 +1,12 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import FileUploader from '../components/upload/FileUploader'
 import JobCard from '../components/dashboard/JobCard'
+import AuthButton from '../components/auth/AuthButton'
 import { CCCParser } from '../lib/parsers/ccc-parser'
 import { ProfitCalculator } from '../lib/profit-calculator'
+import { createClient } from '../lib/supabase/client'
 import { Job } from '../types/job'
 import { BarChart3, Upload as UploadIcon } from 'lucide-react'
 
@@ -12,6 +14,30 @@ export default function HomePage() {
   const [jobs, setJobs] = useState<Job[]>([])
   const [isProcessing, setIsProcessing] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [user, setUser] = useState<any>(null)
+  const supabase = createClient()
+
+  useEffect(() => {
+    const getUser = async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      setUser(user)
+      
+      // Load existing jobs for the user
+      if (user) {
+        const { data: existingJobs } = await supabase
+          .from('jobs')
+          .select('*')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false })
+        
+        if (existingJobs) {
+          setJobs(existingJobs as Job[])
+        }
+      }
+    }
+    
+    getUser()
+  }, [supabase])
 
   const handleFileUpload = async (file: File, content: string) => {
     setIsProcessing(true)
@@ -31,23 +57,45 @@ export default function HomePage() {
       // Calculate profit analysis
       const profitAnalysis = ProfitCalculator.calculateJobProfit(parsedJob)
 
-      // Create job record
-      const job: Job = {
-        id: Date.now().toString(), // TODO: Use proper UUID
-        userId: 'demo-user', // TODO: Get from auth
-        jobNumber: parsedJob.jobNumber,
-        customerName: parsedJob.customerName,
-        vehicleInfo: parsedJob.vehicleInfo,
-        rawData: content,
-        parsedData: parsedJob,
-        profitAnalysis,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      }
+      // Save to Supabase if user is authenticated
+      if (user) {
+        const { data, error: saveError } = await supabase
+          .from('jobs')
+          .insert({
+            user_id: user.id,
+            job_number: parsedJob.jobNumber,
+            customer_name: parsedJob.customerName,
+            vehicle_info: parsedJob.vehicleInfo,
+            raw_data: content,
+            parsed_data: parsedJob,
+            profit_analysis: profitAnalysis,
+          })
+          .select()
+          .single()
 
-      setJobs(prev => [job, ...prev])
-      
-      // TODO: Save to Supabase
+        if (saveError) {
+          throw new Error(`Failed to save job: ${saveError.message}`)
+        }
+
+        if (data) {
+          setJobs(prev => [data as Job, ...prev])
+        }
+      } else {
+        // For demo purposes when not authenticated
+        const job: Job = {
+          id: Date.now().toString(),
+          userId: 'demo-user',
+          jobNumber: parsedJob.jobNumber,
+          customerName: parsedJob.customerName,
+          vehicleInfo: parsedJob.vehicleInfo,
+          rawData: content,
+          parsedData: parsedJob,
+          profitAnalysis,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }
+        setJobs(prev => [job, ...prev])
+      }
       
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to process file')
@@ -64,12 +112,17 @@ export default function HomePage() {
     <div className="min-h-screen bg-gray-50">
       <div className="max-w-7xl mx-auto px-4 py-8">
         <header className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">
-            Profit Per Job Analyzer
-          </h1>
-          <p className="text-gray-600">
-            Upload CCC estimates to analyze job profitability and margins
-          </p>
+          <div className="flex justify-between items-start mb-4">
+            <div>
+              <h1 className="text-3xl font-bold text-gray-900 mb-2">
+                CrashDash
+              </h1>
+              <p className="text-gray-600">
+                Upload CCC estimates to analyze job profitability and margins
+              </p>
+            </div>
+            <AuthButton />
+          </div>
         </header>
 
         {jobs.length === 0 ? (
